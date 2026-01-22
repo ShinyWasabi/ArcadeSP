@@ -1,0 +1,44 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="rage">
+      <UniqueIdentifier>{043D9D7C-F073-9E0D-9960-841085761A0F}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\Common.hpp" />
+    <ClInclude Include="src\Constants.hpp" />
+    <ClInclude Include="src\Events.hpp" />
+    <ClInclude Include="src\Hooks.hpp" />
+    <ClInclude Include="src\Keyboard.hpp" />
+    <ClInclude Include="src\Memory.hpp" />
+    <ClInclude Include="src\Script.hpp" />
+    <ClInclude Include="src\rage\scrNativeCallContext.hpp">
+      <Filter>rage</Filter>
+    </ClInclude>
+    <ClInclude Include="src\rage\scrNativeRegistration.hpp">
+      <Filter>rage</Filter>
+    </ClInclude>
+    <ClInclude Include="src\rage\scrProgram.hpp">
+      <Filter>rage</Filter>
+    </ClInclude>
+    <ClInclude Include="src\rage\scrValue.hpp">
+      <Filter>rage</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\Common.cpp" />
+    <ClCompile Include="src\Events.cpp" />
+    <ClCompile Include="src\Hooks.cpp" />
+    <ClCompile Include="src\Keyboard.cpp" />
+    <ClCompile Include="src\Main.cpp" />
+    <ClCompile Include="src\Memory.cpp" />
+    <ClCompile Include="src\Script.cpp" />
+    <ClCompile Include="src\rage\scrNativeRegistration.cpp">
+      <Filter>rage</Filter>
+    </ClCompile>
+    <ClCompile Include="src\rage\scrProgram.cpp">
+      <Filter>rage</Filter>
+    </ClCompile>
+  </ItemGroup>
+</Project>
