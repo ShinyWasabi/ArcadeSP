@@ -14,6 +14,10 @@
 #include <main.h>
 #include <types.h>
 
+#include "Logger.hpp"
+
+extern bool g_IsEnhanced;
+
 constexpr uint32_t Joaat(const std::string_view str)
 {
     std::uint32_t hash = 0;

@@ -6,8 +6,16 @@ namespace rage
     scrNativeHandler scrNativeRegistration::GetHandler(uint64_t hash)
     {
         static bool init = [] {
-            if (auto addr = Memory::ScanPattern("4C 8D 0D ? ? ? ? 4C 8D 15 ? ? ? ? 45 31 F6"))
-                m_NativeRegistrationTable = addr->Add(3).Rip().As<decltype(m_NativeRegistrationTable)>();
+            if (g_IsEnhanced)
+            {
+                if (auto addr = Memory::ScanPattern("4C 8D 0D ? ? ? ? 4C 8D 15 ? ? ? ? 45 31 F6"))
+                    m_NativeRegistrationTable = addr->Add(3).Rip().As<decltype(m_NativeRegistrationTable)>();
+            }
+            else
+            {
+                if (auto addr = Memory::ScanPattern("48 8D 0D ? ? ? ? 48 8B 14 FA E8 ? ? ? ? 48 85 C0 75 0A")) // Works since 2019 or so
+                    m_NativeRegistrationTable = addr->Add(3).Rip().As<decltype(m_NativeRegistrationTable)>();
+            }
 
             return true;
         }();

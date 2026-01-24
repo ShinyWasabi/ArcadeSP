@@ -106,8 +106,13 @@ std::optional<Memory> Memory::ScanPattern(const char* pattern)
         }
 
         if (match)
-            return Memory(base + i);
+        {
+            auto result = Memory(base + i);
+            LOGF("Found memory pattern at 0x%016llX.", result.As<uintptr_t>());
+            return result;
+        }
     }
 
+    LOGF("Failed to find memory pattern '%s'.", pattern);
     return std::nullopt;
 }

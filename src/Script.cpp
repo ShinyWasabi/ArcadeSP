@@ -3,6 +3,9 @@
 #include "Events.hpp"
 #include "Hooks.hpp"
 #include "Keyboard.hpp"
+#include "ScriptData.hpp"
+#include "rage/scrThread.hpp"
+#include "rage/scrValue.hpp"
 #include <natives.h>
 
 struct Arcade
@@ -66,11 +69,11 @@ void CleanupScript()
     AUDIO::RELEASE_NAMED_SCRIPT_AUDIO_BANK("DLC_TUNER/DLC_Tuner_Arcade_General");
     AUDIO::STOP_STREAM();
 
-    *getGlobalPtr(1979776) = (1 << 0);
+    *getGlobalPtr(g_ScriptData.Glb.AcmData) = (1 << 0);
     while (SCRIPT::GET_NUMBER_OF_THREADS_RUNNING_THE_SCRIPT_WITH_THIS_HASH("am_mp_arc_cab_manager"_J) > 0)
         WAIT(0);
 
-    *getGlobalPtr(1979776) = 0;
+    *getGlobalPtr(g_ScriptData.Glb.AcmData) = 0;
 
     auto& coords = g_ArcadeMarkerCoords[static_cast<int>(g_Arcade.Location)];
     ENTITY::SET_ENTITY_COORDS(PLAYER::PLAYER_PED_ID(), coords.x, coords.y, coords.z, FALSE, FALSE, FALSE, FALSE);
@@ -276,6 +279,12 @@ void ArcadeLoadStateLaunchACMScript()
     if (g_Arcade.LoadState != Arcade::eLoadState::LAUNCH_ACM_SCRIPT)
         return;
 
+    if (SCRIPT::GET_NUMBER_OF_THREADS_RUNNING_THE_SCRIPT_WITH_THIS_HASH("am_mp_arc_cab_manager"_J) > 0)
+    {
+        g_Arcade.LoadState = Arcade::eLoadState::FADE_IN;
+        return;
+    }
+
     while (!SCRIPT::HAS_SCRIPT_WITH_NAME_HASH_LOADED("am_mp_arc_cab_manager"_J))
     {
         SCRIPT::REQUEST_SCRIPT_WITH_NAME_HASH("am_mp_arc_cab_manager"_J);
@@ -291,7 +300,7 @@ void ArcadeLoadStateLaunchACMScript()
     for (int i = 0; i < 41; i++)
     {
         args[45 + i] = static_cast<int64_t>(g_ArcadeCabinetPlacementData[i]);
-        *getGlobalPtr(1845299 + (1 + (0 * 883)) + 260 + 447 + 1 + i) = static_cast<int64_t>(g_ArcadeSaveSlotData[i]); // can be overriden by the management menu later
+        *getGlobalPtr(g_ScriptData.Glb.GpbdFm.Index + (1 + (0 * g_ScriptData.Glb.GpbdFm.Size)) + g_ScriptData.Glb.GpbdFm.PropertyData + g_ScriptData.Glb.GpbdFm.ArcCabSaveSlots + 1 + i) = static_cast<int64_t>(g_ArcadeSaveSlotData[i]); // can be overriden by the management menu later
     }
 
     BUILTIN::START_NEW_SCRIPT_WITH_NAME_HASH_AND_ARGS("am_mp_arc_cab_manager"_J, reinterpret_cast<Any*>(&args[0]), 87, 8344);
@@ -411,6 +420,31 @@ void UpdateArcadePedAnimations()
     }
 }
 
+void UpdateArcadePlayerVisibility()
+{
+    if (g_Arcade.LoadState != Arcade::eLoadState::READY)
+        return;
+
+    BOOL visible = TRUE;
+
+    // workaround for SET_ENTITY_LOCALLY_INVISIBLE, which doesn't work in SP
+
+    if (*getGlobalPtr(g_ScriptData.Glb.AcmData) & (1 << 1))
+    {
+        visible = FALSE;
+    }
+    else
+    {
+        if (auto thread = rage::scrThread::GetThread("am_mp_arcade_claw_crane"_J))
+        {
+            if (auto stack = thread->GetStack())
+                visible = !CAM::DOES_CAM_EXIST(stack[g_ScriptData.Stc.ArcClawCrane.ClawCraneData + g_ScriptData.Stc.ArcClawCrane.ClawCraneCamera].Int);
+        }
+    }
+
+    ENTITY::SET_ENTITY_VISIBLE(PLAYER::PLAYER_PED_ID(), visible, FALSE);
+}
+
 void UpdateArcadeControls()
 {
     if (g_Arcade.LoadState != Arcade::eLoadState::READY)
@@ -495,20 +529,18 @@ void UpdateArcadeMarkers()
 
 void SpoofGlobals()
 {
-    *getGlobalPtr(2658294 + (1 + (0 * 468))) = 4;                        // player state valid
-    *getGlobalPtr(2658294 + (1 + (0 * 468)) + 325 + 8) = 133;            // current simple interior (SIMPLE_INTERIOR_ARCADE_LA_MESA)
-    *getGlobalPtr(2658294 + (1 + (0 * 468)) + 325 + 11) = 0;             // current simple interior owner
-    *getGlobalPtr(1845299 + (1 + (0 * 883)) + 260 + 439 + 1) = (1 << 2); // casino scope out completed bit
-    *getGlobalPtr(1690446) = (1 << 0);                                   // some shit for CAN_REGISTER_MISSION_OBJECTS
-    *getGlobalPtr(1690456) = 80;                                         // some shit for CAN_REGISTER_MISSION_OBJECTS
-
-    // is cabinet purchased/delivered bits
-    *getGlobalPtr(1845299 + (1 + (0 * 883)) + 260 + 445) = -1;
-    *getGlobalPtr(1845299 + (1 + (0 * 883)) + 260 + 445 + 1) = -1;
+    *getGlobalPtr(g_ScriptData.Glb.Gpbd.Index + (1 + (0 * g_ScriptData.Glb.Gpbd.Size))) = 4;                                                                                        // player state valid
+    *getGlobalPtr(g_ScriptData.Glb.Gpbd.Index + (1 + (0 * g_ScriptData.Glb.Gpbd.Size)) + g_ScriptData.Glb.Gpbd.SimpleInteriorData + g_ScriptData.Glb.Gpbd.CurSimpleInterior) = 133; // SIMPLE_INTERIOR_ARCADE_LA_MESA
+    *getGlobalPtr(g_ScriptData.Glb.Gpbd.Index + (1 + (0 * g_ScriptData.Glb.Gpbd.Size)) + g_ScriptData.Glb.Gpbd.SimpleInteriorData + g_ScriptData.Glb.Gpbd.curSimpleInteriorOwner) = 0;
+    *getGlobalPtr(g_ScriptData.Glb.GpbdFm.Index + (1 + (0 * g_ScriptData.Glb.GpbdFm.Size)) + g_ScriptData.Glb.GpbdFm.PropertyData + g_ScriptData.Glb.GpbdFm.ArcData + 1) = (1 << 2); // casino scope out completed flag
+    *getGlobalPtr(g_ScriptData.Glb.GpbdFm.Index + (1 + (0 * g_ScriptData.Glb.GpbdFm.Size)) + g_ScriptData.Glb.GpbdFm.PropertyData + g_ScriptData.Glb.GpbdFm.ArcCabFlags + 0) = -1;   // set all purchased flags
+    *getGlobalPtr(g_ScriptData.Glb.GpbdFm.Index + (1 + (0 * g_ScriptData.Glb.GpbdFm.Size)) + g_ScriptData.Glb.GpbdFm.PropertyData + g_ScriptData.Glb.GpbdFm.ArcCabFlags + 1) = -1;   // set all delivered flags
+    *getGlobalPtr(g_ScriptData.Glb.MissionObjectFlags) = (1 << 0);
+    *getGlobalPtr(g_ScriptData.Glb.NumReservedMissionObjects) = 80;
 
     // open management menu
     if (IsKeyJustUp(VK_F9) && SCRIPT::GET_NUMBER_OF_THREADS_RUNNING_THE_SCRIPT_WITH_THIS_HASH("am_mp_arc_cab_manager"_J) > 0)
-        *getGlobalPtr(1979776) = (1 << 1);
+        *getGlobalPtr(g_ScriptData.Glb.AcmData) = (1 << 1);
 }
 
 void RunScript()
@@ -519,15 +551,26 @@ void RunScript()
     UpdateArcadeEntry();
     UpdateArcadeLoadState();
     UpdateArcadePedAnimations();
+    UpdateArcadePlayerVisibility();
     UpdateArcadeControls();
     UpdateArcadeExit();
     UpdateArcadeMarkers();
     UpdateArcadeBlips();
 }
 
-void InitScript()
+bool InitScript()
 {
-    InitHooks();
+    if (!InitHooks())
+    {
+        LOG("Failed to initialize hooks.");
+        return false;
+    }
+
+    if (!g_ScriptData.Init())
+    {
+        LOG("Failed to initialize script data.");
+        return false;
+    }
 
     MISC::SET_INSTANCE_PRIORITY_MODE(1);
     DLC::ON_ENTER_MP();
@@ -535,11 +578,27 @@ void InitScript()
     g_Arcade.Blips.reserve(static_cast<size_t>(eArcadeLocation::NUM_LOCATIONS));
     g_Arcade.Objects.reserve(NUM_ARCADE_OBJECTS);
     g_Arcade.Peds.reserve(NUM_ARCADE_PEDS);
+
+    LOG("Script initialized successfully.");
+    return true;
 }
 
 void ScriptMain()
 {
-    InitScript();
+    auto gameVersion = getGameVersion();
+    if (gameVersion < eGameVersion::VER_1_0_2944_0)
+    {
+        LOGF("Unsupported game version: %d", static_cast<int>(gameVersion));
+        return;
+    }
+
+    if (gameVersion > 1000)
+        g_IsEnhanced = true;
+
+    LOGF("Game type is %s. Game version is %d.", g_IsEnhanced ? "Enhanced" : "Legacy", static_cast<int>(gameVersion));
+
+    if (!InitScript())
+        return;
 
     while (true)
     {

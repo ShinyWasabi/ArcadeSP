@@ -29,6 +29,14 @@ namespace rage
         uint32_t m_StringsCount;
         char m_Pad3[0x0C];
 
+        uint8_t* GetCode(uint32_t address) const
+        {
+            if (address < m_CodeSize)
+                return &m_CodeBlocks[address >> 14][address & 0x3FFF];
+
+            return nullptr;
+        }
+
         std::optional<uint32_t> GetNativeIndex(scrNativeHandler handler) const
         {
             for (uint32_t i = 0; i < m_NativeCount; ++i)
@@ -39,6 +47,8 @@ namespace rage
 
             return std::nullopt;
         }
+
+        std::optional<uint32_t> ScanPattern(const char* pattern) const;
 
         static scrProgram* GetProgram(uint32_t hash);
 

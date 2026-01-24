@@ -27,14 +27,19 @@ void HandleTSE_457347143(int index)
         dataToSend[4] = 10;
         dataToSend[15] = 10;
 
+        int scores[10];
+        for (int i = 0; i < 10; i++)
+            scores[i] = MISC::GET_RANDOM_INT_IN_RANGE(1000, 100000);
+
+        std::sort(scores, scores + 10, std::greater<int>());
+
         for (int i = 0; i < 10; i++)
         {
             int a = MISC::GET_RANDOM_INT_IN_RANGE(0, 35);
             int b = MISC::GET_RANDOM_INT_IN_RANGE(0, 35);
             int c = MISC::GET_RANDOM_INT_IN_RANGE(0, 35);
             dataToSend[5 + i] = (int64_t)(a & 0x3F) | ((int64_t)(b & 0x3F) << 6) | ((int64_t)(c & 0x3F) << 12);
-
-            dataToSend[16 + i] = MISC::GET_RANDOM_INT_IN_RANGE(1000, 100000);
+            dataToSend[16 + i] = scores[i];
         }
 
         // Send the data back to whichever arcade script requested it
