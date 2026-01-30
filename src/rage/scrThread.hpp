@@ -30,6 +30,16 @@ namespace rage
             return g_IsEnhanced ? reinterpret_cast<const scrThread_GEN9*>(this)->m_Context.m_ProgramHash : reinterpret_cast<const scrThread_GEN8*>(this)->m_Context.m_ProgramHash;
         }
 
+        State GetState() const
+        {
+            return g_IsEnhanced ? reinterpret_cast<const scrThread_GEN9*>(this)->m_Context.m_State : reinterpret_cast<const scrThread_GEN8*>(this)->m_Context.m_State;
+        }
+
+        void SetState(State state)
+        {
+            g_IsEnhanced ? reinterpret_cast<scrThread_GEN9*>(this)->m_Context.m_State = state : reinterpret_cast<scrThread_GEN8*>(this)->m_Context.m_State = state;
+        }
+
         scrValue* GetStack() const
         {
             return g_IsEnhanced ? reinterpret_cast<const scrThread_GEN9*>(this)->m_Stack : reinterpret_cast<const scrThread_GEN8*>(this)->m_Stack;

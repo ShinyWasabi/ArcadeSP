@@ -4,15 +4,8 @@
 
 bool readFailed = false;
 
-void ReadScriptCode(rage::scrProgram* program, const char* pattern, const std::vector<std::pair<uint32_t, bool>>& offsetAndRip, void* out, uint32_t size)
+void ReadScript(rage::scrProgram* program, const char* pattern, const std::vector<std::pair<uint32_t, bool>>& offsetAndRip, void* out, uint32_t size)
 {
-    if (!program || !pattern)
-    {
-        readFailed = true;
-        LOG("Script program or pattern is invalid.");
-        return;
-    }
-
     auto addressOpt = program->ScanPattern(pattern);
     if (!addressOpt.has_value())
     {
@@ -29,25 +22,11 @@ void ReadScriptCode(rage::scrProgram* program, const char* pattern, const std::v
         if (rip)
         {
             auto code = program->GetCode(address);
-            if (!code)
-            {
-                readFailed = true;
-                LOGF("Code for script program %s is invalid.", program->m_Name);
-                return;
-            }
-
             address = code[0] | (code[1] << 8) | (code[2] << 16);
         }
     }
 
     auto code = program->GetCode(address);
-    if (!code)
-    {
-        readFailed = true;
-        LOGF("Code for script program %s is invalid.", program->m_Name);
-        return;
-    }
-
     std::memcpy(out, code, size);
 
     int32_t value = 0;
@@ -71,29 +50,29 @@ bool ScriptData::Init()
 
     // Globals
 
-    ReadScriptCode(program1, "61 ? ? ? 40 03 35 01 37 0C", {{1, false}}, &Glb.AcmData, 3);
+    ReadScript(program1, "61 ? ? ? 40 03 35 01 37 0C", {{1, false}}, &Glb.AcmData, 3);
 
     // this has two occurrences, but the scan should always find the first one, which is what we need
-    ReadScriptCode(program1, "38 01 38 00 2C 01 ? ? 61 ? ? ? 49 ? ? 46 ? ? 46 ? ? 36", {{9, false}}, &Glb.GpbdFm.Index, 3);
-    ReadScriptCode(program1, "38 01 38 00 2C 01 ? ? 61 ? ? ? 49 ? ? 46 ? ? 46 ? ? 36", {{13, false}}, &Glb.GpbdFm.Size, 2);
-    ReadScriptCode(program1, "38 01 38 00 2C 01 ? ? 61 ? ? ? 49 ? ? 46 ? ? 46 ? ? 36", {{16, false}}, &Glb.GpbdFm.PropertyData, 2);
-    ReadScriptCode(program1, "38 01 38 00 2C 01 ? ? 61 ? ? ? 49 ? ? 46 ? ? 46 ? ? 36", {{19, false}}, &Glb.GpbdFm.ArcCabSaveSlots, 2);
+    ReadScript(program1, "38 01 38 00 2C 01 ? ? 61 ? ? ? 49 ? ? 46 ? ? 46 ? ? 36", {{9, false}}, &Glb.GpbdFm.Index, 3);
+    ReadScript(program1, "38 01 38 00 2C 01 ? ? 61 ? ? ? 49 ? ? 46 ? ? 46 ? ? 36", {{13, false}}, &Glb.GpbdFm.Size, 2);
+    ReadScript(program1, "38 01 38 00 2C 01 ? ? 61 ? ? ? 49 ? ? 46 ? ? 46 ? ? 36", {{16, false}}, &Glb.GpbdFm.PropertyData, 2);
+    ReadScript(program1, "38 01 38 00 2C 01 ? ? 61 ? ? ? 49 ? ? 46 ? ? 46 ? ? 36", {{19, false}}, &Glb.GpbdFm.ArcCabSaveSlots, 2);
     Glb.GpbdFm.ArcData = Glb.GpbdFm.ArcCabSaveSlots - 8;
     Glb.GpbdFm.ArcCabFlags = Glb.GpbdFm.ArcCabSaveSlots - 2;
 
-    ReadScriptCode(program1, "61 ? ? ? 49 ? ? 46 ? ? 41 ? 5D ? ? ? 25 11", {{1, false}}, &Glb.Gpbd.Index, 3);
-    ReadScriptCode(program1, "61 ? ? ? 49 ? ? 46 ? ? 41 ? 5D ? ? ? 25 11", {{5, false}}, &Glb.Gpbd.Size, 2);
-    ReadScriptCode(program1, "61 ? ? ? 49 ? ? 46 ? ? 41 ? 5D ? ? ? 25 11", {{8, false}}, &Glb.Gpbd.SimpleInteriorData, 2);
-    ReadScriptCode(program1, "61 ? ? ? 49 ? ? 46 ? ? 41 ? 5D ? ? ? 25 11", {{11, false}}, &Glb.Gpbd.CurSimpleInterior, 1);
+    ReadScript(program1, "61 ? ? ? 49 ? ? 46 ? ? 41 ? 5D ? ? ? 25 11", {{1, false}}, &Glb.Gpbd.Index, 3);
+    ReadScript(program1, "61 ? ? ? 49 ? ? 46 ? ? 41 ? 5D ? ? ? 25 11", {{5, false}}, &Glb.Gpbd.Size, 2);
+    ReadScript(program1, "61 ? ? ? 49 ? ? 46 ? ? 41 ? 5D ? ? ? 25 11", {{8, false}}, &Glb.Gpbd.SimpleInteriorData, 2);
+    ReadScript(program1, "61 ? ? ? 49 ? ? 46 ? ? 41 ? 5D ? ? ? 25 11", {{11, false}}, &Glb.Gpbd.CurSimpleInterior, 1);
     Glb.Gpbd.curSimpleInteriorOwner = Glb.Gpbd.CurSimpleInterior + 3;
 
-    ReadScriptCode(program1, "2D 05 09 00 00 62", {{6, false}}, &Glb.MissionObjectFlags, 3);
+    ReadScript(program1, "2D 05 09 00 00 62", {{6, false}}, &Glb.MissionObjectFlags, 3);
     Glb.NumReservedMissionObjects = Glb.MissionObjectFlags + 10;
 
     // Statics
 
-    ReadScriptCode(program2, "4F ? ? 41 ? 2C 05 ? ? 2A", {{1, false}}, &Stc.ArcClawCrane.ClawCraneData, 2);
-    ReadScriptCode(program2, "4F ? ? 41 ? 2C 05 ? ? 2A", {{4, false}}, &Stc.ArcClawCrane.ClawCraneCamera, 1);
+    ReadScript(program2, "4F ? ? 41 ? 2C 05 ? ? 2A", {{1, false}}, &Stc.ArcClawCrane.ClawCraneData, 2);
+    ReadScript(program2, "4F ? ? 41 ? 2C 05 ? ? 2A", {{4, false}}, &Stc.ArcClawCrane.ClawCraneCamera, 1);
 
     SCRIPT::SET_SCRIPT_WITH_NAME_HASH_AS_NO_LONGER_NEEDED("am_mp_arc_cab_manager"_J);
     SCRIPT::SET_SCRIPT_WITH_NAME_HASH_AS_NO_LONGER_NEEDED("am_mp_arcade_claw_crane"_J);

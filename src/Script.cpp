@@ -3,7 +3,6 @@
 #include "Events.hpp"
 #include "Hooks.hpp"
 #include "Keyboard.hpp"
-#include "Memory.hpp"
 #include "ScriptData.hpp"
 #include "rage/scrThread.hpp"
 #include "rage/scrValue.hpp"
@@ -11,116 +10,99 @@
 
 struct Arcade
 {
-    enum class eLoadState
+    enum class eState
     {
         IDLE,
         FADE_OUT,
-        ACTIVATE_ENTITY_SETS,
         CREATE_OBJECTS,
-        CREATE_PEDS,
         REQUEST_AUDIO,
-        LAUNCH_ACM_SCRIPT,
+        LAUNCH_SCRIPTS,
         FADE_IN,
-        READY
+        READY,
+        CLEANUP
     };
 
-    struct ArcadePed
-    {
-        Ped PedIndex = NULL;
-        Object ObjectIndex = NULL;
-    };
-
-    std::vector<Blip> Blips;
-    std::vector<Object> Objects;
-    std::vector<ArcadePed> Peds;
-    eArcadeLocation Location = eArcadeLocation::NONE;
-    eLoadState LoadState = eLoadState::IDLE;
+    int Location = 0;
+    eState State = eState::IDLE;
+    Blip Blips[NUM_ARCADE_LOCATIONS] = {};
+    Object Objects[NUM_ARCADE_OBJECTS] = {};
 } g_Arcade;
 
-void CleanupScript()
+void SpoofGlobals()
 {
-    Interior interior = INTERIOR::GET_INTERIOR_AT_COORDS(2730.0f, -380.0f, -50.0f);
-    if (INTERIOR::IS_VALID_INTERIOR(interior))
-    {
-        for (auto& set : g_ArcadeEntitySets)
-            INTERIOR::DEACTIVATE_INTERIOR_ENTITY_SET(interior, set);
+    *getGlobalPtr(g_ScriptData.Glb.Gpbd.Index + (1 + (0 * g_ScriptData.Glb.Gpbd.Size))) = 4; // player state valid
+    *getGlobalPtr(g_ScriptData.Glb.Gpbd.Index + (1 + (0 * g_ScriptData.Glb.Gpbd.Size)) + g_ScriptData.Glb.Gpbd.SimpleInteriorData + g_ScriptData.Glb.Gpbd.curSimpleInteriorOwner) = 0;
+    *getGlobalPtr(g_ScriptData.Glb.GpbdFm.Index + (1 + (0 * g_ScriptData.Glb.GpbdFm.Size)) + g_ScriptData.Glb.GpbdFm.PropertyData + g_ScriptData.Glb.GpbdFm.ArcData + 1) |= (1 << 2); // arcade setup completed flag
+    *getGlobalPtr(g_ScriptData.Glb.GpbdFm.Index + (1 + (0 * g_ScriptData.Glb.GpbdFm.Size)) + g_ScriptData.Glb.GpbdFm.PropertyData + g_ScriptData.Glb.GpbdFm.ArcCabFlags + 0) = -1;    // set all purchased flags
+    *getGlobalPtr(g_ScriptData.Glb.GpbdFm.Index + (1 + (0 * g_ScriptData.Glb.GpbdFm.Size)) + g_ScriptData.Glb.GpbdFm.PropertyData + g_ScriptData.Glb.GpbdFm.ArcCabFlags + 1) = -1;    // set all delivered flags
+    *getGlobalPtr(g_ScriptData.Glb.MissionObjectFlags) |= (1 << 0);
+    *getGlobalPtr(g_ScriptData.Glb.NumReservedMissionObjects) = 80;
 
-        INTERIOR::REFRESH_INTERIOR(interior);
-    }
-
-    for (auto& object : g_Arcade.Objects)
-    {
-        if (ENTITY::DOES_ENTITY_EXIST(object))
-            ENTITY::DELETE_ENTITY(&object);
-    }
-    g_Arcade.Objects.clear();
-
-    for (auto& ped : g_Arcade.Peds)
-    {
-        if (ENTITY::DOES_ENTITY_EXIST(ped.PedIndex))
-            ENTITY::DELETE_ENTITY(&ped.PedIndex);
-
-        if (ENTITY::DOES_ENTITY_EXIST(ped.ObjectIndex))
-            ENTITY::DELETE_ENTITY(&ped.ObjectIndex);
-    }
-    g_Arcade.Peds.clear();
-
-    AUDIO::RELEASE_NAMED_SCRIPT_AUDIO_BANK("DLC_HEIST3/ARCADE_GENERAL_01");
-    AUDIO::RELEASE_NAMED_SCRIPT_AUDIO_BANK("DLC_HEIST3/ARCADE_GENERAL_02");
-    AUDIO::RELEASE_NAMED_SCRIPT_AUDIO_BANK("DLC_TUNER/DLC_Tuner_Arcade_General");
-    AUDIO::STOP_STREAM();
-
-    *getGlobalPtr(g_ScriptData.Glb.AcmData) = (1 << 0);
-
-    int startTime = MISC::GET_GAME_TIMER();
-    while (SCRIPT::GET_NUMBER_OF_THREADS_RUNNING_THE_SCRIPT_WITH_THIS_HASH("am_mp_arc_cab_manager"_J) > 0)
-    {
-        if ((MISC::GET_GAME_TIMER() - startTime) >= 5000)
-        {
-            LOG("Timed out killing ACM script, doing it manually.");
-            MISC::TERMINATE_ALL_SCRIPTS_WITH_THIS_NAME("am_mp_arc_cab_manager");
-            break;
-        }
-
-        WAIT(0);
-    }
-
-    *getGlobalPtr(g_ScriptData.Glb.AcmData) = 0;
-
-    auto& coords = g_ArcadeMarkerCoords[static_cast<int>(g_Arcade.Location)];
-    ENTITY::SET_ENTITY_COORDS(PLAYER::PLAYER_PED_ID(), coords.x, coords.y, coords.z, FALSE, FALSE, FALSE, FALSE);
-    GRAPHICS::CLEAR_TIMECYCLE_MODIFIER(); // fix conflict with simple trainer
-
-    g_Arcade.Location = eArcadeLocation::NONE;
-    g_Arcade.LoadState = Arcade::eLoadState::IDLE;
-
-    LOG("Cleaned up script.");
+    // open management menu
+    if (IsKeyJustUp(VK_F9) && SCRIPT::GET_NUMBER_OF_THREADS_RUNNING_THE_SCRIPT_WITH_THIS_HASH("am_mp_arc_cab_manager"_J) > 0)
+        *getGlobalPtr(g_ScriptData.Glb.AcmData) |= (1 << 1);
 }
 
-void UpdateArcadeEntry()
+void UpdateBlips()
 {
-    if (g_Arcade.LoadState != Arcade::eLoadState::IDLE)
+    if (g_Arcade.State != Arcade::eState::IDLE)
         return;
 
-    for (int i = 0; i < static_cast<int>(eArcadeLocation::NUM_LOCATIONS); i++)
+    for (int i = 0; i < NUM_ARCADE_LOCATIONS; i++)
     {
-        auto& coords1 = g_ArcadeEntryAreaData[i].Coords1;
-        auto& coords2 = g_ArcadeEntryAreaData[i].Coords2;
-        auto& width = g_ArcadeEntryAreaData[i].Width;
+        auto& blip = g_Arcade.Blips[i];
+        if (HUD::DOES_BLIP_EXIST(blip))
+            continue;
 
-        if (ENTITY::IS_ENTITY_IN_ANGLED_AREA(PLAYER::PLAYER_PED_ID(), coords1.x, coords1.y, coords1.z, coords2.x, coords2.y, coords2.z, width, FALSE, TRUE, 1))
+        auto& coords = g_ArcadeBlipCoords[i];
+
+        blip = HUD::ADD_BLIP_FOR_COORD(coords.x, coords.y, coords.z);
+        HUD::SET_BLIP_ROUTE(blip, FALSE);
+        HUD::SET_BLIP_SPRITE(blip, 740);
+        HUD::SET_BLIP_SCALE(blip, 1.0f);
+        HUD::SET_BLIP_PRIORITY(blip, 7);
+        HUD::SET_BLIP_COLOUR(blip, 4);
+        HUD::SET_BLIP_AS_SHORT_RANGE(blip, TRUE);
+    }
+}
+
+void UpdateMarkers()
+{
+    if (g_Arcade.State != Arcade::eState::IDLE)
+        return;
+
+    for (int i = 0; i < NUM_ARCADE_LOCATIONS; i++)
+    {
+        int r, g, b, a;
+        HUD::GET_HUD_COLOUR(9, &r, &g, &b, &a);
+        a = 100;
+
+        auto& coords = g_ArcadeEntryCoords[i];
+        GRAPHICS::DRAW_MARKER(1, coords.x, coords.y, coords.z, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.75f, 0.75f, 0.75f, r, g, b, a, FALSE, FALSE, 2, FALSE, NULL, NULL, FALSE);
+    }
+}
+
+void UpdateEntry()
+{
+    if (g_Arcade.State != Arcade::eState::IDLE)
+        return;
+
+    for (int i = 0; i < NUM_ARCADE_LOCATIONS; i++)
+    {
+        auto& coords = g_ArcadeEntryCoords[i];
+        if (ENTITY::IS_ENTITY_AT_COORD(PLAYER::PLAYER_PED_ID(), coords.x, coords.y, coords.z, 1.0f, 1.0f, 1.0f, FALSE, TRUE, 0))
         {
-            g_Arcade.Location = static_cast<eArcadeLocation>(i);
-            g_Arcade.LoadState = Arcade::eLoadState::FADE_OUT;
+            g_Arcade.Location = i;
+            g_Arcade.State = Arcade::eState::FADE_OUT;
             LOG("Player is in angled area, fading out.");
             break;
         }
     }
 }
 
-void ArcadeLoadStateFadeOut()
+void FadeOut()
 {
-    if (g_Arcade.LoadState != Arcade::eLoadState::FADE_OUT)
+    if (g_Arcade.State != Arcade::eState::FADE_OUT)
         return;
 
     PLAYER::SET_PLAYER_CONTROL(PLAYER::PLAYER_ID(), FALSE, 0);
@@ -130,161 +112,49 @@ void ArcadeLoadStateFadeOut()
     while (!CAM::IS_SCREEN_FADED_OUT())
         WAIT(0);
 
-    LOG("Faded out, activating entity sets.");
-    g_Arcade.LoadState = Arcade::eLoadState::ACTIVATE_ENTITY_SETS;
+    LOG("Faded out, creating objects.");
+    g_Arcade.State = Arcade::eState::CREATE_OBJECTS;
 }
 
-void ArcadeLoadStateActivateEntitySets()
+void CreateObjects()
 {
-    if (g_Arcade.LoadState != Arcade::eLoadState::ACTIVATE_ENTITY_SETS)
+    if (g_Arcade.State != Arcade::eState::CREATE_OBJECTS)
         return;
 
-    Interior interior = INTERIOR::GET_INTERIOR_AT_COORDS(2730.0f, -380.0f, -50.0f);
-    if (INTERIOR::IS_VALID_INTERIOR(interior))
+    for (int i = 0; i < NUM_ARCADE_OBJECTS; i++)
     {
-        for (auto& entitySet : g_ArcadeEntitySets)
-            INTERIOR::ACTIVATE_INTERIOR_ENTITY_SET(interior, entitySet);
+        auto& object = g_Arcade.Objects[i];
+        if (ENTITY::DOES_ENTITY_EXIST(object))
+            continue;
 
-        INTERIOR::REFRESH_INTERIOR(interior);
-        LOG("Activated entity sets, creating objects.");
-    }
-    else
-    {
-        LOG("Interior is invalid, creating objects.");
-    }
-
-    g_Arcade.LoadState = Arcade::eLoadState::CREATE_OBJECTS;
-}
-
-void ArcadeLoadStateCreateObjects()
-{
-    if (g_Arcade.LoadState != Arcade::eLoadState::CREATE_OBJECTS)
-        return;
-
-    for (auto& placementData : g_ArcadeObjectPlacementData)
-    {
-        while (!STREAMING::HAS_MODEL_LOADED(placementData.ObjectModel))
+        auto& data = g_ArcadeObjects[i];
+        while (!STREAMING::HAS_MODEL_LOADED(data.ObjectModel))
         {
-            STREAMING::REQUEST_MODEL(placementData.ObjectModel);
+            STREAMING::REQUEST_MODEL(data.ObjectModel);
             WAIT(0);
         }
 
-        auto& coords = placementData.Coords;
+        auto& coords = data.Coords;
 
-        Object objectIndex = OBJECT::CREATE_OBJECT_NO_OFFSET(placementData.ObjectModel, coords.x, coords.y, coords.z, FALSE, FALSE, FALSE, 0);
+        Object objectIndex = OBJECT::CREATE_OBJECT_NO_OFFSET(data.ObjectModel, coords.x, coords.y, coords.z, FALSE, FALSE, FALSE, 0);
         ENTITY::SET_ENTITY_COORDS_NO_OFFSET(objectIndex, coords.x, coords.y, coords.z, FALSE, FALSE, TRUE);
-        ENTITY::SET_ENTITY_HEADING(objectIndex, placementData.Heading);
+        ENTITY::SET_ENTITY_HEADING(objectIndex, data.Heading);
         ENTITY::FREEZE_ENTITY_POSITION(objectIndex, TRUE);
         ENTITY::SET_ENTITY_INVINCIBLE(objectIndex, TRUE, FALSE);
         ENTITY::SET_ENTITY_CAN_BE_DAMAGED(objectIndex, FALSE);
-        STREAMING::SET_MODEL_AS_NO_LONGER_NEEDED(placementData.ObjectModel);
+        STREAMING::SET_MODEL_AS_NO_LONGER_NEEDED(data.ObjectModel);
 
-        g_Arcade.Objects.push_back(objectIndex);
+        g_Arcade.Objects[i] = objectIndex;
     }
 
-    LOG("Objects created, creating peds.");
-    g_Arcade.LoadState = Arcade::eLoadState::CREATE_PEDS;
+    LOG("Objects created, requesting audio.");
+    g_Arcade.State = Arcade::eState::REQUEST_AUDIO;
 }
 
-void ArcadeLoadStateCreatePeds()
+void RequestAudio()
 {
-    if (g_Arcade.LoadState != Arcade::eLoadState::CREATE_PEDS)
+    if (g_Arcade.State != Arcade::eState::REQUEST_AUDIO)
         return;
-
-    for (int i = 0; i < NUM_ARCADE_PEDS; i++)
-    {
-        auto& arcadePed = g_Arcade.Peds[i];
-        if (ENTITY::DOES_ENTITY_EXIST(arcadePed.PedIndex))
-            continue;
-
-        auto& placementData = g_ArcadePedPlacementData[i];
-        auto& actionData = g_ArcadePedActionData[static_cast<int>(placementData.Action)];
-
-        const char* animDict = placementData.Action == eArcadePedAction::WENDY_BAR ? "anim_heist@arcade_property@wendy@bar@" : "anim_heist@arcade_combined@";
-
-        while (!STREAMING::HAS_MODEL_LOADED(placementData.PedModel))
-        {
-            STREAMING::REQUEST_MODEL(placementData.PedModel);
-            WAIT(0);
-        }
-
-        while (!STREAMING::HAS_ANIM_DICT_LOADED(animDict))
-        {
-            STREAMING::REQUEST_ANIM_DICT(animDict);
-            WAIT(0);
-        }
-
-        auto& coords = placementData.Coords;
-
-        Ped pedIndex = PED::CREATE_PED(26, placementData.PedModel, coords.x, coords.y, coords.z, placementData.Heading, FALSE, FALSE);
-        ENTITY::SET_ENTITY_CAN_BE_DAMAGED(pedIndex, FALSE);
-        PED::SET_PED_AS_ENEMY(pedIndex, FALSE);
-        WEAPON::SET_CURRENT_PED_WEAPON(pedIndex, "WEAPON_UNARMED"_J, TRUE);
-        PED::SET_BLOCKING_OF_NON_TEMPORARY_EVENTS(pedIndex, TRUE);
-        PED::SET_PED_RESET_FLAG(pedIndex, 249, TRUE);
-        PED::SET_PED_CONFIG_FLAG(pedIndex, 185, TRUE);
-        PED::SET_PED_CONFIG_FLAG(pedIndex, 108, TRUE);
-        PED::SET_PED_CONFIG_FLAG(pedIndex, 106, TRUE);
-        PED::SET_PED_CAN_EVASIVE_DIVE(pedIndex, FALSE);
-        PED::SET_TREAT_AS_AMBIENT_PED_FOR_DRIVER_LOCKON(pedIndex, TRUE);
-        PED::SET_PED_CAN_RAGDOLL_FROM_PLAYER_IMPACT(pedIndex, FALSE);
-        PED::SET_PED_CAN_RAGDOLL(pedIndex, FALSE);
-        PED::SET_PED_CONFIG_FLAG(pedIndex, 208, TRUE);
-        TASK::CLEAR_PED_TASKS(pedIndex);
-
-        if (placementData.Action == eArcadePedAction::WENDY_BAR)
-        {
-            PED::SET_PED_DEFAULT_COMPONENT_VARIATION(pedIndex);
-            PED::SET_PED_COMPONENT_VARIATION(pedIndex, 0, 0, 0, 0);
-            PED::SET_PED_COMPONENT_VARIATION(pedIndex, 2, 0, 0, 0);
-            PED::SET_PED_COMPONENT_VARIATION(pedIndex, 3, 0, 0, 0);
-            PED::SET_PED_COMPONENT_VARIATION(pedIndex, 4, 0, 0, 0);
-            PED::SET_PED_COMPONENT_VARIATION(pedIndex, 7, 0, 0, 0);
-            PED::SET_PED_COMPONENT_VARIATION(pedIndex, 8, 0, 0, 0);
-            PED::SET_PED_PROP_INDEX(pedIndex, 0, 0, 0, FALSE, 1);
-            PED::SET_PED_PROP_INDEX(pedIndex, 1, 0, 0, FALSE, 1);
-        }
-
-        Object objectIndex = NULL;
-        if (actionData.ObjectModel != NULL)
-        {
-            while (!STREAMING::HAS_MODEL_LOADED(actionData.ObjectModel))
-            {
-                STREAMING::REQUEST_MODEL(actionData.ObjectModel);
-                WAIT(0);
-            }
-
-            Vector3 boneCoords = PED::GET_PED_BONE_COORDS(pedIndex, actionData.BoneId, 0.0f, 0.0f, 0.0f);
-            int boneIndex = PED::GET_PED_BONE_INDEX(pedIndex, actionData.BoneId);
-
-            objectIndex = OBJECT::CREATE_OBJECT(actionData.ObjectModel, boneCoords.x, boneCoords.y, boneCoords.z, FALSE, FALSE, TRUE);
-            ENTITY::ATTACH_ENTITY_TO_ENTITY(objectIndex, pedIndex, boneIndex, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, TRUE, TRUE, FALSE, FALSE, 2, TRUE, 0);
-        }
-
-        if (actionData.AnimCount > 1)
-            PED::SET_PED_ALTERNATE_MOVEMENT_ANIM(pedIndex, 0, animDict, actionData.BaseAnimName, 8.0f, TRUE);
-
-        arcadePed = {pedIndex, objectIndex};
-    }
-
-    LOG("Peds created, requesting audio.");
-    g_Arcade.LoadState = Arcade::eLoadState::REQUEST_AUDIO;
-}
-
-void ArcadeLoadStateRequestAudio()
-{
-    if (g_Arcade.LoadState != Arcade::eLoadState::REQUEST_AUDIO)
-        return;
-
-    while (!AUDIO::LOAD_STREAM("Walla_Normal", "DLC_H3_Arcade_Walla_Sounds"))
-        WAIT(0);
-
-    AUDIO::PLAY_STREAM_FROM_POSITION(2729.5894f, -383.9195f, -48.9951f);
-
-    while (!AUDIO::IS_STREAM_PLAYING())
-        WAIT(0);
-
-    AUDIO::SET_VARIABLE_ON_STREAM("PedDensity", 1.0f);
 
     bool loaded1 = false, loaded2 = false, loaded3 = false;
     do
@@ -295,165 +165,85 @@ void ArcadeLoadStateRequestAudio()
         WAIT(0);
     } while (!loaded1 || !loaded2 || !loaded3);
 
-    LOG("Audio requested, launching ACM script.");
-    g_Arcade.LoadState = Arcade::eLoadState::LAUNCH_ACM_SCRIPT;
+    LOG("Audio requested, launching scripts.");
+    g_Arcade.State = Arcade::eState::LAUNCH_SCRIPTS;
 }
 
-void ArcadeLoadStateLaunchACMScript()
+void LaunchScripts()
 {
-    if (g_Arcade.LoadState != Arcade::eLoadState::LAUNCH_ACM_SCRIPT)
+    if (g_Arcade.State != Arcade::eState::LAUNCH_SCRIPTS)
         return;
 
-    if (SCRIPT::GET_NUMBER_OF_THREADS_RUNNING_THE_SCRIPT_WITH_THIS_HASH("am_mp_arc_cab_manager"_J) > 0)
+    bool loaded1 = false, loaded2 = false, loaded3 = false, loaded4 = false;
+    do
     {
-        g_Arcade.LoadState = Arcade::eLoadState::FADE_IN;
-        LOG("ACM script is already running, fading in.");
-        return;
-    }
-
-    while (!SCRIPT::HAS_SCRIPT_WITH_NAME_HASH_LOADED("am_mp_arc_cab_manager"_J))
-    {
+        loaded1 = SCRIPT::HAS_SCRIPT_WITH_NAME_HASH_LOADED("am_mp_arcade_peds"_J);
+        loaded2 = SCRIPT::HAS_SCRIPT_WITH_NAME_HASH_LOADED("arcade_seating"_J);
+        loaded3 = SCRIPT::HAS_SCRIPT_WITH_NAME_HASH_LOADED("ob_jukebox"_J);
+        loaded4 = SCRIPT::HAS_SCRIPT_WITH_NAME_HASH_LOADED("am_mp_arc_cab_manager"_J);
+        SCRIPT::REQUEST_SCRIPT_WITH_NAME_HASH("am_mp_arcade"_J);
+        SCRIPT::REQUEST_SCRIPT_WITH_NAME_HASH("am_mp_arcade_peds"_J);
+        SCRIPT::REQUEST_SCRIPT_WITH_NAME_HASH("arcade_seating"_J);
+        SCRIPT::REQUEST_SCRIPT_WITH_NAME_HASH("ob_jukebox"_J);
         SCRIPT::REQUEST_SCRIPT_WITH_NAME_HASH("am_mp_arc_cab_manager"_J);
         WAIT(0);
-    }
+    } while (!loaded1 || !loaded2 || !loaded3 || !loaded4);
 
-    int64_t args[87]{};
+    int64_t pedArgs[3]{};
+    int64_t acmArgs[87]{};
 
-    args[1] = 41;
-    args[43] = "mainw_rm"_J;
-    args[44] = 41;
-
+    acmArgs[1] = 41;
+    acmArgs[43] = "mainw_rm"_J;
+    acmArgs[44] = 41;
     for (int i = 0; i < 41; i++)
     {
-        args[45 + i] = static_cast<int64_t>(g_ArcadeCabinetPlacementData[i]);
-        *getGlobalPtr(g_ScriptData.Glb.GpbdFm.Index + (1 + (0 * g_ScriptData.Glb.GpbdFm.Size)) + g_ScriptData.Glb.GpbdFm.PropertyData + g_ScriptData.Glb.GpbdFm.ArcCabSaveSlots + 1 + i) = static_cast<int64_t>(g_ArcadeSaveSlotData[i]); // can be overriden by the management menu later
+        acmArgs[45 + i] = static_cast<int64_t>(g_ArcadeCabinets[i]);
+        *getGlobalPtr(g_ScriptData.Glb.GpbdFm.Index + (1 + (0 * g_ScriptData.Glb.GpbdFm.Size)) + g_ScriptData.Glb.GpbdFm.PropertyData + g_ScriptData.Glb.GpbdFm.ArcCabSaveSlots + 1 + i) = static_cast<int64_t>(g_ArcadeSaveSlots[i]); // can be overriden by the management menu later
     }
 
-    if (MISC::GET_NUMBER_OF_FREE_STACKS_OF_THIS_SIZE(8344) <= 0)
-        LOGF("Warning, no free stack size. Mod won't work. This shouldn't have happened unless you're using a gameconfig that modifies the stack sizes.");
+    *getGlobalPtr(g_ScriptData.Glb.Gpbd.Index + (1 + (0 * g_ScriptData.Glb.Gpbd.Size)) + g_ScriptData.Glb.Gpbd.SimpleInteriorData + g_ScriptData.Glb.Gpbd.CurSimpleInterior) = 128 + g_Arcade.Location;
+    *getGlobalPtr(g_ScriptData.Glb.GpbdFm.Index + (1 + (0 * g_ScriptData.Glb.GpbdFm.Size)) + g_ScriptData.Glb.GpbdFm.PropertyData + g_ScriptData.Glb.GpbdFm.ArcData + 0) = g_Arcade.Location + 1; // required for arcade_seating tv
 
-    int id = BUILTIN::START_NEW_SCRIPT_WITH_NAME_HASH_AND_ARGS("am_mp_arc_cab_manager"_J, reinterpret_cast<Any*>(&args[0]), 87, 8344);
+    BUILTIN::START_NEW_SCRIPT_WITH_NAME_HASH_AND_ARGS("am_mp_arcade_peds"_J, reinterpret_cast<Any*>(&pedArgs[0]), 3, 5050);
+    BUILTIN::START_NEW_SCRIPT_WITH_NAME_HASH("arcade_seating"_J, 5050);
+    BUILTIN::START_NEW_SCRIPT_WITH_NAME_HASH("ob_jukebox"_J, 1424);
+    BUILTIN::START_NEW_SCRIPT_WITH_NAME_HASH_AND_ARGS("am_mp_arc_cab_manager"_J, reinterpret_cast<Any*>(&acmArgs[0]), 87, 8344);
+
+    SCRIPT::SET_SCRIPT_WITH_NAME_HASH_AS_NO_LONGER_NEEDED("am_mp_arcade_peds"_J);
+    SCRIPT::SET_SCRIPT_WITH_NAME_HASH_AS_NO_LONGER_NEEDED("arcade_seating"_J);
+    SCRIPT::SET_SCRIPT_WITH_NAME_HASH_AS_NO_LONGER_NEEDED("ob_jukebox"_J);
     SCRIPT::SET_SCRIPT_WITH_NAME_HASH_AS_NO_LONGER_NEEDED("am_mp_arc_cab_manager"_J);
 
-    LOGF("ACM script launched (id=%d), fading in.", id);
-    g_Arcade.LoadState = Arcade::eLoadState::FADE_IN;
+    rage::scrThread::GetThread("arcade_seating"_J)->SetState(rage::scrThread::State::PAUSED); // terminates if the screen is faded out
+
+    LOG("Scripts launched, fading in.");
+    g_Arcade.State = Arcade::eState::FADE_IN;
 }
 
-void ArcadeLoadStateFadeIn()
+void FadeIn()
 {
-    if (g_Arcade.LoadState != Arcade::eLoadState::FADE_IN)
+    if (g_Arcade.State != Arcade::eState::FADE_IN)
         return;
 
     ENTITY::SET_ENTITY_COORDS(PLAYER::PLAYER_PED_ID(), 2737.91f, -374.29f, -48.0f, FALSE, FALSE, FALSE, FALSE);
     ENTITY::SET_ENTITY_HEADING(PLAYER::PLAYER_PED_ID(), 179.55f);
+    CAM::SET_GAMEPLAY_CAM_RELATIVE_HEADING(0.0f);
     PLAYER::SET_PLAYER_CONTROL(PLAYER::PLAYER_ID(), TRUE, 0);
     ENTITY::FREEZE_ENTITY_POSITION(PLAYER::PLAYER_PED_ID(), FALSE);
 
+    WAIT(2000);
+
     CAM::DO_SCREEN_FADE_IN(1000);
 
+    rage::scrThread::GetThread("arcade_seating"_J)->SetState(rage::scrThread::State::RUNNING);
+
     LOG("Faded in, arcade is ready.");
-    g_Arcade.LoadState = Arcade::eLoadState::READY;
+    g_Arcade.State = Arcade::eState::READY;
 }
 
-void UpdateArcadeLoadState()
+void UpdatePlayerVisibility()
 {
-    switch (g_Arcade.LoadState)
-    {
-    case Arcade::eLoadState::FADE_OUT:
-        ArcadeLoadStateFadeOut();
-        break;
-    case Arcade::eLoadState::ACTIVATE_ENTITY_SETS:
-        ArcadeLoadStateActivateEntitySets();
-        break;
-    case Arcade::eLoadState::CREATE_OBJECTS:
-        ArcadeLoadStateCreateObjects();
-        break;
-    case Arcade::eLoadState::CREATE_PEDS:
-        ArcadeLoadStateCreatePeds();
-        break;
-    case Arcade::eLoadState::REQUEST_AUDIO:
-        ArcadeLoadStateRequestAudio();
-        break;
-    case Arcade::eLoadState::LAUNCH_ACM_SCRIPT:
-        ArcadeLoadStateLaunchACMScript();
-        break;
-    case Arcade::eLoadState::FADE_IN:
-        ArcadeLoadStateFadeIn();
-        break;
-    }
-}
-
-void UpdateArcadePedAnimations()
-{
-    if (g_Arcade.LoadState != Arcade::eLoadState::READY)
-        return;
-
-    for (int i = 0; i < NUM_ARCADE_PEDS; i++)
-    {
-        auto& arcadePed = g_Arcade.Peds[i];
-
-        if (!ENTITY::DOES_ENTITY_EXIST(arcadePed.PedIndex))
-            continue;
-
-        int status = TASK::GET_SCRIPT_TASK_STATUS(arcadePed.PedIndex, "script_task_perform_sequence"_J);
-        if (status == 0 || status == 1)
-            continue;
-
-        auto& placementData = g_ArcadePedPlacementData[i];
-        auto& actionData = g_ArcadePedActionData[static_cast<int>(placementData.Action)];
-
-        const char* animDict = placementData.Action == eArcadePedAction::WENDY_BAR ? "anim_heist@arcade_property@wendy@bar@" : "anim_heist@arcade_combined@";
-
-        int sequence = 0;
-        TASK::OPEN_SEQUENCE_TASK(&sequence);
-
-        if (actionData.AnimCount == 1)
-        {
-            auto& animName = actionData.AnimNames[0];
-            float animTime = MISC::GET_RANDOM_FLOAT_IN_RANGE(0.0f, 0.7f);
-
-            if (placementData.Action == eArcadePedAction::MALE_ELBOWS_ON_BAR)
-                TASK::TASK_PLAY_ANIM_ADVANCED(NULL, animDict, animName, placementData.Coords.x, placementData.Coords.y, placementData.Coords.z, 0.0f, 0.0f, placementData.Heading, 8.0f, -8.0f, -1, 790529, animTime, 2, 1);
-            else
-                TASK::TASK_PLAY_ANIM(NULL, animDict, animName, 8.0f, -8.0f, -1, 1, animTime, FALSE, FALSE, FALSE);
-        }
-        else
-        {
-            std::vector<int> clipVar;
-            clipVar.reserve(actionData.AnimCount);
-
-            for (int i = 0; i < actionData.AnimCount; i++)
-                clipVar.push_back(i);
-
-            for (int i = 0; i < 10; i++)
-            {
-                int value1 = MISC::GET_RANDOM_INT_IN_RANGE(0, actionData.AnimCount);
-                int value2 = MISC::GET_RANDOM_INT_IN_RANGE(0, actionData.AnimCount);
-                int value3 = clipVar[value1];
-                clipVar[value1] = clipVar[value2];
-                clipVar[value2] = value3;
-            }
-
-            for (int i = 0; i < 4; i++)
-            {
-                if (clipVar[i] < 0)
-                    continue;
-
-                auto& animName = actionData.AnimNames[clipVar[i]];
-                TASK::TASK_PLAY_ANIM(NULL, animDict, animName, 8.0f, -8.0f, -1, 0, 0.0f, FALSE, FALSE, FALSE);
-            }
-        }
-
-        TASK::SET_SEQUENCE_TO_REPEAT(sequence, 1);
-        TASK::CLOSE_SEQUENCE_TASK(sequence);
-        TASK::TASK_PERFORM_SEQUENCE(arcadePed.PedIndex, sequence);
-        TASK::CLEAR_SEQUENCE_TASK(&sequence);
-    }
-}
-
-void UpdateArcadePlayerVisibility()
-{
-    if (g_Arcade.LoadState != Arcade::eLoadState::READY)
+    if (g_Arcade.State != Arcade::eState::READY)
         return;
 
     BOOL visible = TRUE;
@@ -476,9 +266,9 @@ void UpdateArcadePlayerVisibility()
     ENTITY::SET_ENTITY_VISIBLE(PLAYER::PLAYER_PED_ID(), visible, FALSE);
 }
 
-void UpdateArcadeControls()
+void UpdateControls()
 {
-    if (g_Arcade.LoadState != Arcade::eLoadState::READY)
+    if (g_Arcade.State != Arcade::eState::READY)
         return;
 
     WEAPON::SET_CURRENT_PED_WEAPON(PLAYER::PLAYER_PED_ID(), "WEAPON_UNARMED"_J, TRUE);
@@ -487,9 +277,9 @@ void UpdateArcadeControls()
         PAD::DISABLE_CONTROL_ACTION(0, control, TRUE);
 }
 
-void UpdateArcadeExit()
+void UpdateExit()
 {
-    if (g_Arcade.LoadState != Arcade::eLoadState::READY)
+    if (g_Arcade.State != Arcade::eState::READY)
         return;
 
     if (ENTITY::IS_ENTITY_IN_ANGLED_AREA(PLAYER::PLAYER_PED_ID(), 2737.304f, -373.593f, -48.979f, 2738.514f, -373.562f, -46.750f, 1.500f, FALSE, TRUE, 1))
@@ -504,13 +294,7 @@ void UpdateArcadeExit()
         {
             HUD::CLEAR_HELP(TRUE);
 
-            CAM::DO_SCREEN_FADE_OUT(1000);
-            while (!CAM::IS_SCREEN_FADED_OUT())
-                WAIT(0);
-
-            CleanupScript();
-
-            CAM::DO_SCREEN_FADE_IN(1000);
+            g_Arcade.State = Arcade::eState::CLEANUP;
         }
     }
     else
@@ -521,75 +305,107 @@ void UpdateArcadeExit()
     }
 }
 
-void UpdateArcadeBlips()
+void Cleanup()
 {
-    for (int i = 0; i < static_cast<int>(eArcadeLocation::NUM_LOCATIONS); i++)
+    CAM::DO_SCREEN_FADE_OUT(1000);
+    while (!CAM::IS_SCREEN_FADED_OUT())
+        WAIT(0);
+
+    for (auto& object : g_Arcade.Objects)
     {
-        auto& blip = g_Arcade.Blips[i];
-        if (HUD::DOES_BLIP_EXIST(blip))
-            continue;
-
-        auto& coords = g_ArcadeBlipCoords[i];
-
-        blip = HUD::ADD_BLIP_FOR_COORD(coords.x, coords.y, coords.z);
-        HUD::SET_BLIP_ROUTE(blip, FALSE);
-        HUD::SET_BLIP_SPRITE(blip, 740);
-        HUD::SET_BLIP_SCALE(blip, 1.0f);
-        HUD::SET_BLIP_PRIORITY(blip, 7);
-        HUD::SET_BLIP_COLOUR(blip, 4);
-        HUD::SET_BLIP_AS_SHORT_RANGE(blip, TRUE);
+        if (ENTITY::DOES_ENTITY_EXIST(object))
+        {
+            ENTITY::DELETE_ENTITY(&object);
+            object = NULL;
+        }
     }
-}
 
-void UpdateArcadeMarkers()
-{
-    if (g_Arcade.LoadState != Arcade::eLoadState::IDLE)
-        return;
+    AUDIO::RELEASE_NAMED_SCRIPT_AUDIO_BANK("DLC_HEIST3/ARCADE_GENERAL_01");
+    AUDIO::RELEASE_NAMED_SCRIPT_AUDIO_BANK("DLC_HEIST3/ARCADE_GENERAL_02");
+    AUDIO::RELEASE_NAMED_SCRIPT_AUDIO_BANK("DLC_TUNER/DLC_Tuner_Arcade_General");
 
-    for (int i = 0; i < static_cast<int>(eArcadeLocation::NUM_LOCATIONS); i++)
+    *getGlobalPtr(g_ScriptData.Glb.AcmData) |= (1 << 0); // kill ACM
+    *getGlobalPtr(g_ScriptData.Glb.Gpbd.Index + (1 + (0 * g_ScriptData.Glb.Gpbd.Size)) + g_ScriptData.Glb.Gpbd.SimpleInteriorData + g_ScriptData.Glb.Gpbd.CurSimpleInterior) = -1;
+    *getGlobalPtr(g_ScriptData.Glb.GpbdFm.Index + (1 + (0 * g_ScriptData.Glb.GpbdFm.Size)) + g_ScriptData.Glb.GpbdFm.PropertyData + g_ScriptData.Glb.GpbdFm.ArcData + 0) = 0;
+
+    int startTime = MISC::GET_GAME_TIMER();
+
+    bool running1 = true, running2 = true, running3 = true, running4 = true;
+    do
     {
-        auto& coords = g_ArcadeMarkerCoords[i];
+        running1 = SCRIPT::GET_NUMBER_OF_THREADS_RUNNING_THE_SCRIPT_WITH_THIS_HASH("am_mp_arcade_peds"_J) > 0;
+        running2 = SCRIPT::GET_NUMBER_OF_THREADS_RUNNING_THE_SCRIPT_WITH_THIS_HASH("arcade_seating"_J) > 0;
+        running3 = SCRIPT::GET_NUMBER_OF_THREADS_RUNNING_THE_SCRIPT_WITH_THIS_HASH("ob_jukebox"_J) > 0;
+        running4 = SCRIPT::GET_NUMBER_OF_THREADS_RUNNING_THE_SCRIPT_WITH_THIS_HASH("am_mp_arc_cab_manager"_J) > 0;
+        if ((MISC::GET_GAME_TIMER() - startTime) >= 5000)
+        {
+            MISC::TERMINATE_ALL_SCRIPTS_WITH_THIS_NAME("am_mp_arcade_peds");
+            MISC::TERMINATE_ALL_SCRIPTS_WITH_THIS_NAME("arcade_seating");
+            MISC::TERMINATE_ALL_SCRIPTS_WITH_THIS_NAME("ob_jukebox");
+            MISC::TERMINATE_ALL_SCRIPTS_WITH_THIS_NAME("am_mp_arc_cab_manager");
+            LOG("Timed out killing scripts, did it manually.");
+            break;
+        }
 
-        int r, g, b, a;
-        HUD::GET_HUD_COLOUR(9, &r, &g, &b, &a);
-        a = 100;
+        WAIT(0);
+    } while (running1 || running2 || running3 || running4);
 
-        GRAPHICS::DRAW_MARKER(1, coords.x, coords.y, coords.z, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.75f, 0.75f, 0.75f, r, g, b, a, FALSE, FALSE, 2, FALSE, NULL, NULL, FALSE);
-    }
+    *getGlobalPtr(g_ScriptData.Glb.AcmData) = 0;
+
+    auto& coords = g_ArcadeExitCoords[g_Arcade.Location].first;
+    auto& heading = g_ArcadeExitCoords[g_Arcade.Location].second;
+    ENTITY::SET_ENTITY_COORDS(PLAYER::PLAYER_PED_ID(), coords.x, coords.y, coords.z, FALSE, FALSE, FALSE, FALSE);
+    ENTITY::SET_ENTITY_HEADING(PLAYER::PLAYER_PED_ID(), heading);
+    CAM::SET_GAMEPLAY_CAM_RELATIVE_HEADING(0.0f);
+    GRAPHICS::CLEAR_TIMECYCLE_MODIFIER(); // fix conflict with simple trainer
+
+    g_Arcade.Location = -1;
+    g_Arcade.State = Arcade::eState::IDLE;
+
+    CAM::DO_SCREEN_FADE_IN(1000);
+
+    LOG("Cleaned up script.");
 }
 
-void SpoofGlobals()
-{
-    *getGlobalPtr(g_ScriptData.Glb.Gpbd.Index + (1 + (0 * g_ScriptData.Glb.Gpbd.Size))) = 4;                                                                                        // player state valid
-    *getGlobalPtr(g_ScriptData.Glb.Gpbd.Index + (1 + (0 * g_ScriptData.Glb.Gpbd.Size)) + g_ScriptData.Glb.Gpbd.SimpleInteriorData + g_ScriptData.Glb.Gpbd.CurSimpleInterior) = 133; // SIMPLE_INTERIOR_ARCADE_LA_MESA
-    *getGlobalPtr(g_ScriptData.Glb.Gpbd.Index + (1 + (0 * g_ScriptData.Glb.Gpbd.Size)) + g_ScriptData.Glb.Gpbd.SimpleInteriorData + g_ScriptData.Glb.Gpbd.curSimpleInteriorOwner) = 0;
-    *getGlobalPtr(g_ScriptData.Glb.GpbdFm.Index + (1 + (0 * g_ScriptData.Glb.GpbdFm.Size)) + g_ScriptData.Glb.GpbdFm.PropertyData + g_ScriptData.Glb.GpbdFm.ArcData + 1) = (1 << 2); // casino scope out completed flag
-    *getGlobalPtr(g_ScriptData.Glb.GpbdFm.Index + (1 + (0 * g_ScriptData.Glb.GpbdFm.Size)) + g_ScriptData.Glb.GpbdFm.PropertyData + g_ScriptData.Glb.GpbdFm.ArcCabFlags + 0) = -1;   // set all purchased flags
-    *getGlobalPtr(g_ScriptData.Glb.GpbdFm.Index + (1 + (0 * g_ScriptData.Glb.GpbdFm.Size)) + g_ScriptData.Glb.GpbdFm.PropertyData + g_ScriptData.Glb.GpbdFm.ArcCabFlags + 1) = -1;   // set all delivered flags
-    *getGlobalPtr(g_ScriptData.Glb.MissionObjectFlags) = (1 << 0);
-    *getGlobalPtr(g_ScriptData.Glb.NumReservedMissionObjects) = 80;
-
-    // open management menu
-    if (IsKeyJustUp(VK_F9) && SCRIPT::GET_NUMBER_OF_THREADS_RUNNING_THE_SCRIPT_WITH_THIS_HASH("am_mp_arc_cab_manager"_J) > 0)
-        *getGlobalPtr(g_ScriptData.Glb.AcmData) = (1 << 1);
-}
-
-void RunScript()
+void Run()
 {
     SpoofGlobals();
     ProcessScriptEvents();
 
-    UpdateArcadeEntry();
-    UpdateArcadeLoadState();
-    UpdateArcadePedAnimations();
-    UpdateArcadePlayerVisibility();
-    UpdateArcadeControls();
-    UpdateArcadeExit();
-    UpdateArcadeMarkers();
-    UpdateArcadeBlips();
+    switch (g_Arcade.State)
+    {
+    case Arcade::eState::IDLE:
+        UpdateBlips();
+        UpdateMarkers();
+        UpdateEntry();
+        break;
+    case Arcade::eState::FADE_OUT:
+        FadeOut();
+        break;
+    case Arcade::eState::CREATE_OBJECTS:
+        CreateObjects();
+        break;
+    case Arcade::eState::REQUEST_AUDIO:
+        RequestAudio();
+        break;
+    case Arcade::eState::LAUNCH_SCRIPTS:
+        LaunchScripts();
+        break;
+    case Arcade::eState::FADE_IN:
+        FadeIn();
+        break;
+    case Arcade::eState::READY:
+        UpdatePlayerVisibility();
+        UpdateControls();
+        UpdateExit();
+        break;
+    case Arcade::eState::CLEANUP:
+        Cleanup();
+        break;
+    }
 }
 
-bool InitScript()
+bool Init()
 {
     if (!InitHooks())
     {
@@ -603,55 +419,17 @@ bool InitScript()
         return false;
     }
 
-    bool* isEnteringSp = nullptr;
-    int* instancePriorityMode = nullptr;
+    DLC::ON_ENTER_MP();
+    MISC::SET_INSTANCE_PRIORITY_MODE(1);
 
-    if (g_IsEnhanced)
+    Interior interior = INTERIOR::GET_INTERIOR_AT_COORDS(2730.0f, -380.0f, -50.0f);
+    if (INTERIOR::IS_VALID_INTERIOR(interior))
     {
-        if (auto addr = Memory::ScanPattern("88 1D ? ? ? ? 89 3D"))
-            isEnteringSp = addr->Add(2).Rip().As<bool*>();
+        for (auto& entitySet : g_ArcadeEntitySets)
+            INTERIOR::ACTIVATE_INTERIOR_ENTITY_SET(interior, entitySet);
 
-        if (auto addr = Memory::ScanPattern("89 0D ? ? ? ? E8 ? ? ? ? 83 FE 01"))
-            instancePriorityMode = addr->Add(2).Rip().As<int*>();
+        INTERIOR::REFRESH_INTERIOR(interior);
     }
-    else
-    {
-        if (auto addr = Memory::ScanPattern("BA E2 99 8F 57 E8 ? ? ? ? 48 8B 0D"))
-            isEnteringSp = addr->Sub(0x13).Add(2).Rip().As<bool*>();
-
-        if (auto addr = Memory::ScanPattern("89 0D ? ? ? ? E8 ? ? ? ? 83 FB 01"))
-            instancePriorityMode = addr->Add(2).Rip().As<int*>();
-    }
-
-    if (isEnteringSp)
-    {
-        if (*isEnteringSp || g_IsEnhanced) // on enhanced, something sets this to 0 before us without actually loading the MP map for some reason
-        {
-            DLC::ON_ENTER_MP();
-            LOG("Loaded MP map parts.");
-        }
-        else
-        {
-            LOG("MP map parts are already loaded.");
-        }
-    }
-
-    if (instancePriorityMode)
-    {
-        if (*instancePriorityMode != 1)
-        {
-            MISC::SET_INSTANCE_PRIORITY_MODE(1);
-            LOG("Set instance priority mode to 1.");
-        }
-        else
-        {
-            LOG("Instance priority mode is already set.");
-        }
-    }
-
-    g_Arcade.Blips.resize(static_cast<size_t>(eArcadeLocation::NUM_LOCATIONS), NULL);
-    g_Arcade.Objects.resize(NUM_ARCADE_OBJECTS, NULL);
-    g_Arcade.Peds.resize(NUM_ARCADE_PEDS, {});
 
     LOG("Script initialized successfully.");
     return true;
@@ -671,12 +449,12 @@ void ScriptMain()
 
     LOGF("Game type is %s. Game version is %d.", g_IsEnhanced ? "Enhanced" : "Legacy", static_cast<int>(gameVersion));
 
-    if (!InitScript())
+    if (!Init())
         return;
 
     while (true)
     {
-        RunScript();
+        Run();
         WAIT(0);
     }
 }
